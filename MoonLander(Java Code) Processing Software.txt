@@ -1,0 +1,180 @@
+import controlP5.*;
+import processing.opengl.*;
+import hypermedia.net.UDP;
+import hypermedia.net.*;
+
+// Declare ControlP5 and UDP objects
+ControlP5 cp5;
+UDP udp;
+
+// Declare PShape and Chart objects
+PShape rocket;
+Chart roll, pitch, AccY, AccZ, AccX;
+
+// Arrays for storing incoming data
+float[] Euler = new float[3];
+float[] Acc = new float[3];
+float[] smoothedEuler = new float[3];
+
+// Variables for light and smoothing
+float lightValue = 0;
+float smoothingFactor = 0.2;
+
+// Sensitivity threshold for earthquake detection
+float ILSAsenstivity = 11;
+
+// PrintWriter for logging data to a file
+PrintWriter dataWriter;
+
+void setup() {
+  // Initialize ControlP5 and UDP
+  cp5 = new ControlP5(this);
+  udp = new UDP(this, 3737);
+  udp.listen(true);
+
+  // Set up the window size and rendering mode
+  size(1024, 720, P3D);
+  smooth();
+
+  // Load the 3D model
+  rocket = loadShape("MoonLander.obj");
+
+  // Initialize charts for displaying data
+  initializeCharts();
+
+  // Set up the file writer for logging data
+  initFileWriter();
+}
+
+void draw() {
+  // Enable depth test for 3D rendering
+  hint(ENABLE_DEPTH_TEST);
+
+  // Draw background and sun visualization
+  background(0);
+  drawSun(width / 2 + 480, height / 2, 30, map(lightValue, 0, 500, 30, 100));
+
+  // Check for earthquake detection
+  checkForEarthquake();
+
+  // Set up lighting
+  lights();
+  ambientLight(255, 255, 255);
+
+  // Transform and render the 3D model
+  transformAndRenderModel();
+
+  // Save incoming data to file
+  saveDataToFile();
+
+  // Disable depth test
+  hint(DISABLE_DEPTH_TEST);
+}
+
+void initializeCharts() {
+  roll = createChart("ROTATION AROUND Z-AXIS", 50, 50, -90, 90, "ROLL");
+  pitch = createChart("ROTATION AROUND X-AXIS", 50, 180, -90, 90, "PITCH");
+  AccY = createChart("ACCELERATION AROUND Y-AXIS", 50, 310, -1, 1, "AccY");
+  AccX = createChart("ACCELERATION AROUND X-AXIS", 50, 440, -1, 1, "AccX");
+  AccZ = createChart("ACCELERATION AROUND Z-AXIS", 50, 570, -11, 11, "AccZ");
+}
+
+Chart createChart(String title, int x, int y, float minRange, float maxRange, String datasetName) {
+  Chart chart = cp5.addChart(title)
+    .setPosition(x, y)
+    .setSize(600, 100)
+    .setRange(minRange, maxRange)
+    .setView(Chart.LINE)
+    .setStrokeWeight(4)
+    .setColorBackground(color(255, 255, 255));
+  chart.addDataSet(datasetName);
+  chart.setData(datasetName, new float[100]);
+  return chart;
+}
+
+void transformAndRenderModel() {
+  pushMatrix();
+  translate(width / 2, height / 2, 500);
+  rotateZ(-smoothedEuler[2] * PI / 180);
+  rotateY(-smoothedEuler[0] * PI / 180);
+  rotateX(smoothedEuler[1] * PI / 180);
+  shape(rocket);
+  popMatrix();
+}
+
+void receive(byte[] data, String ip, int port) {
+  // Convert the received byte data to a string
+  String message = new String(subset(data, 0, data.length));
+  String[] list = split(message, ',');
+
+  // Parse accelerometer and Euler angles
+  Acc[0] = Float.parseFloat(list[0]);
+  Acc[1] = Float.parseFloat(list[1]);
+  Acc[2] = Float.parseFloat(list[2]);
+  lightValue = Float.parseFloat(list[3]);
+  Euler[0] = Float.parseFloat(list[4]);
+  Euler[1] = Float.parseFloat(list[5]);
+  Euler[2] = Float.parseFloat(list[6]);
+
+  // Smooth the Euler angles
+  smoothEulerAngles();
+
+  println("Received: \"" + message + "\" from " + ip + " on port " + port);
+}
+
+void smoothEulerAngles() {
+  for (int i = 0; i < 3; i++) {
+    smoothedEuler[i] = smoothedEuler[i] * (1.0 - smoothingFactor) + Euler[i] * smoothingFactor;
+  }
+}
+
+void checkForEarthquake() {
+  if (abs(Acc[0]) > ILSAsenstivity || abs(Acc[1]) > ILSAsenstivity) {
+    println("Earthquake detected!");
+  }
+}
+
+void drawSun(float x, float y, float sunRadius, float raysRadius) {
+  // Draw the sun with rays based on light intensity
+  noStroke();
+  fill(255, 140, 0);
+  ellipse(x, y, sunRadius * 2, sunRadius * 2);
+
+  int numRays = 12;
+  float angleIncrement = TWO_PI / numRays;
+
+  for (int i = 0; i < numRays; i++) {
+    float angle = i * angleIncrement;
+    float rayX = x + cos(angle) * raysRadius;
+    float rayY = y + sin(angle) * raysRadius;
+    stroke(255, 140, 0, 100);
+    line(x, y, rayX, rayY);
+  }
+
+  fill(0);
+  textSize(15);
+  text("SUN", x, y - 15);
+  textSize(24);
+  textAlign(CENTER, CENTER);
+  text(int(lightValue), x, y);
+}
+
+void initFileWriter() {
+  String timestamp = nf(year(), 4) + nf(month(), 2) + nf(day(), 2) + nf(hour(), 2) + nf(minute(), 2) + nf(second(), 2);
+  String fileName = "Lander's_Data" + timestamp + ".txt";
+  dataWriter = createWriter(fileName);
+}
+
+void saveDataToFile() {
+  String timestamp = nf(hour(), 2) + ":" + nf(minute(), 2) + ":" + nf(second(), 2);
+  String dataLine = timestamp + "   " +
+                    "Acceleration Y: " + Acc[0] + "   " +
+                    "Acceleration X: " + Acc[1] + "   " +
+                    "Acceleration Z: " + Acc[2] + "   " +
+                    "Sunlight: " + lightValue + "   " +
+                    "Rotate Y: " + Euler[0] + "   " +
+                    "Rotate X: " + Euler[1] + "   " +
+                    "Rotate Z: " + Euler[2];
+  dataWriter.println(dataLine);
+  dataWriter.flush();
+}
